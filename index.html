@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>XAUUSDT Heatmap Terminal</title>
+  <title>XAUUSDT Liquidity Heatmap</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: #06080d;
+      background: #080a10;
       color: #eaecef;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       overflow: hidden;
@@ -18,8 +18,8 @@
       justify-content: space-between;
       align-items: center;
       padding: 8px 12px;
-      background: #0e121a;
-      border-bottom: 1px solid #1a202c;
+      background: #10141f;
+      border-bottom: 1px solid #1c2333;
     }
     .left-controls {
       display: flex;
@@ -30,15 +30,15 @@
       font-size: 11px;
       padding: 3px 8px;
       border-radius: 4px;
-      background: #1e2638;
-      color: #ffd700;
+      background: #1b2338;
+      color: #f1b90c;
       font-weight: 700;
-      border: 1px solid #334155;
+      border: 1px solid #2e3a55;
     }
     select {
-      background: #141b2d;
+      background: #141b2b;
       color: #00f0ff;
-      border: 1px solid #2d3748;
+      border: 1px solid #2d384e;
       padding: 4px 6px;
       border-radius: 4px;
       font-size: 11px;
@@ -70,7 +70,7 @@
       gap: 6px;
       font-size: 10px;
       color: #94a3b8;
-      background: rgba(6, 8, 13, 0.85);
+      background: rgba(8, 10, 16, 0.9);
       padding: 4px 8px;
       border-radius: 4px;
       border: 1px solid #1e293b;
@@ -89,14 +89,13 @@
     <div class="left-controls">
       <span class="badge">Binance XAUUSDT</span>
       <select id="timeframe-select">
-        <option value="1" selected>Live Stream</option>
-        <option value="60">1 Min</option>
-        <option value="300">5 Min</option>
-        <option value="420">7 Min</option>
+        <option value="1m">1m</option>
+        <option value="5m" selected>5m</option>
+        <option value="15m">15m</option>
       </select>
-      <span id="status" style="font-size: 10px; color: #00ff88;">ACTIVE</span>
+      <span id="status" style="font-size: 10px; color: #00ff88;">REALTIME</span>
     </div>
-    <div class="price-tag" id="last-price">4287.50</div>
+    <div class="price-tag" id="last-price">--.--</div>
   </div>
 
   <div id="canvas-container">
@@ -104,7 +103,7 @@
     <div id="legend">
       <span>Low Liq</span>
       <div class="gradient-bar"></div>
-      <span>Whale Wall</span>
+      <span>Whale Cluster</span>
     </div>
   </div>
 
@@ -123,144 +122,158 @@
     window.addEventListener('resize', resize);
     resize();
 
-    let bucketSec = parseInt(tfSelect.value, 10);
+    let currentPrice = 4286.93;
+    let candles = [];
+    let orderBookLevels = [];
+    let currentTf = tfSelect.value;
+
     tfSelect.addEventListener('change', (e) => {
-      bucketSec = parseInt(e.target.value, 10);
+      currentTf = e.target.value;
+      loadHistoricalKlines();
     });
 
-    let currentMid = 4287.50;
-    const historyCols = [];
-    const maxCols = Math.max(90, Math.floor(width / 3.5));
-    let lastBucketTime = 0;
-
-    function getLiquidityColor(norm) {
-      if (norm <= 0.08) return 'rgba(0, 31, 63, 0.4)';
-      if (norm < 0.3) return `rgba(0, 116, 217, ${0.5 + norm * 1.5})`;
-      if (norm < 0.6) return `rgba(0, 255, 204, ${0.7 + norm * 0.5})`;
-      if (norm < 0.85) return `rgba(255, 220, 0, ${0.85 + norm * 0.15})`;
-      return `rgb(255, 0, 85)`; // Heavy limit wall
-    }
-
-    // Process new snapshot into heatmap
-    function pushOrderSnapshot(mid, bids, asks) {
-      currentMid = mid;
-      priceDisplay.textContent = currentMid.toFixed(2);
-
-      const now = Math.floor(Date.now() / 1000);
-      const bucketTime = Math.floor(now / bucketSec) * bucketSec;
-
-      let maxQty = 0.001;
-      const snapshot = [];
-      bids.forEach(([p, q]) => { maxQty = Math.max(maxQty, q); snapshot.push({ p, q }); });
-      asks.forEach(([p, q]) => { maxQty = Math.max(maxQty, q); snapshot.push({ p, q }); });
-
-      if (bucketSec === 1 || bucketTime !== lastBucketTime) {
-        lastBucketTime = bucketTime;
-        historyCols.push({ mid: currentMid, orders: snapshot, maxQty: maxQty });
-        if (historyCols.length > maxCols) historyCols.shift();
-      } else {
-        const last = historyCols[historyCols.length - 1];
-        if (last) {
-          last.mid = currentMid;
-          last.orders = snapshot;
-          last.maxQty = Math.max(last.maxQty, maxQty);
-        }
-      }
-    }
-
-    // Direct REST Polling loop (No WebSocket blocking issues)
-    async function fetchBinanceData() {
+    // 1. Fetch Real Klines (Candlesticks) from Binance Futures
+    async function loadHistoricalKlines() {
       try {
-        const res = await fetch('https://fapi.binance.com/fapi/v1/depth?symbol=XAUUSDT&limit=50');
-        if (!res.ok) throw new Error('API error');
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${currentTf}&limit=40`);
         const data = await res.json();
-        
-        const bids = data.bids.map(b => [parseFloat(b[0]), parseFloat(b[1])]);
-        const asks = data.asks.map(a => [parseFloat(a[0]), parseFloat(a[1])]);
-        
-        if (bids.length && asks.length) {
-          const mid = (bids[0][0] + asks[0][0]) / 2;
-          pushOrderSnapshot(mid, bids, asks);
-          statusLabel.textContent = "LIVE POLLING";
-          statusLabel.style.color = "#00ff88";
+        if (Array.isArray(data)) {
+          candles = data.map(d => ({
+            time: d[0],
+            open: parseFloat(d[1]),
+            high: parseFloat(d[2]),
+            low: parseFloat(d[3]),
+            close: parseFloat(d[4]),
+            vol: parseFloat(d[5])
+          }));
+          if (candles.length > 0) {
+            currentPrice = candles[candles.length - 1].close;
+            priceDisplay.textContent = currentPrice.toFixed(2);
+          }
         }
-      } catch (err) {
-        // Fallback simulation: Market noise around last known price
-        const jitter = (Math.random() - 0.49) * 0.15;
-        currentMid = +(currentMid + jitter).toFixed(2);
-        
-        const simBids = [];
-        const simAsks = [];
-        for (let i = 1; i <= 25; i++) {
-          simBids.push([+(currentMid - (i * 0.3)).toFixed(2), Math.random() * 5 + (i % 5 === 0 ? 15 : 1)]);
-          simAsks.push([+(currentMid + (i * 0.3)).toFixed(2), Math.random() * 5 + (i % 6 === 0 ? 18 : 1)]);
-        }
-        pushOrderSnapshot(currentMid, simBids, simAsks);
-        statusLabel.textContent = "SYNTHETIC FEED";
-        statusLabel.style.color = "#ffd700";
-      }
+      } catch (err) {}
     }
 
-    // Initial pre-fill so screen is NEVER black
-    for (let k = 0; k < 40; k++) {
-      const p = currentMid + (Math.sin(k / 5) * 1.5);
-      const b = [], a = [];
-      for (let i = 1; i <= 20; i++) {
-        b.push([p - i * 0.4, Math.random() * 8 + (i % 4 === 0 ? 16 : 1)]);
-        a.push([p + i * 0.4, Math.random() * 8 + (i % 5 === 0 ? 14 : 1)]);
-      }
-      historyCols.push({ mid: p, orders: [...b, ...a], maxQty: 20 });
+    // 2. Fetch Live Futures Depth for Real Liquidity Walls
+    async function fetchLiquidity() {
+      try {
+        const res = await fetch('https://fapi.binance.com/fapi/v1/depth?symbol=XAUUSDT&limit=100');
+        const data = await res.json();
+        if (data.bids && data.asks) {
+          const list = [];
+          data.bids.forEach(b => list.push({ price: parseFloat(b[0]), qty: parseFloat(b[1]), side: 'bid' }));
+          data.asks.forEach(a => list.push({ price: parseFloat(a[0]), qty: parseFloat(a[1]), side: 'ask' }));
+          
+          let maxQ = 0.001;
+          list.forEach(item => { if (item.qty > maxQ) maxQ = item.qty; });
+          list.forEach(item => item.norm = item.qty / maxQ);
+
+          orderBookLevels = list;
+          if (data.bids[0] && data.asks[0]) {
+            currentPrice = (parseFloat(data.bids[0][0]) + parseFloat(data.asks[0][0])) / 2;
+            priceDisplay.textContent = currentPrice.toFixed(2);
+          }
+        }
+      } catch (err) {}
     }
 
-    // Poll every 600ms
-    setInterval(fetchBinanceData, 600);
-    fetchBinanceData();
+    loadHistoricalKlines();
+    fetchLiquidity();
+    setInterval(fetchLiquidity, 1000);
+    setInterval(loadHistoricalKlines, 5000);
+
+    function getHeatmapColor(norm) {
+      if (norm < 0.15) return 'rgba(0, 100, 200, 0.25)';
+      if (norm < 0.4) return 'rgba(0, 220, 255, 0.45)';
+      if (norm < 0.7) return 'rgba(255, 230, 0, 0.7)';
+      return 'rgba(255, 30, 80, 0.95)'; // Coinglass red/orange whale band
+    }
 
     function render() {
-      ctx.fillStyle = "#06080d";
+      ctx.fillStyle = "#080a10";
       ctx.fillRect(0, 0, width, height);
 
-      const priceSpread = 8; // +/- $8 spread
-      const minP = currentMid - priceSpread;
-      const maxP = currentMid + priceSpread;
-      const colWidth = width / maxCols;
+      // Price Spread calculation (+/- $15 from market)
+      const range = 14;
+      const minP = currentPrice - range;
+      const maxP = currentPrice + range;
 
-      if (historyCols.length > 0) {
-        historyCols.forEach((col, idx) => {
-          const x = idx * colWidth;
+      const getY = (p) => height - ((p - minP) / (maxP - minP)) * height;
 
-          col.orders.forEach(order => {
-            if (order.p >= minP && order.p <= maxP) {
-              const y = height - ((order.p - minP) / (maxP - minP)) * height;
-              const intensity = Math.min(order.q / (col.maxQty * 0.65), 1);
-              ctx.fillStyle = getLiquidityColor(intensity);
-              ctx.fillRect(x, y - 2, colWidth + 0.8, 3.8);
-            }
-          });
+      // 1. Draw Coinglass Horizontal Liquidity Bands across the canvas
+      orderBookLevels.forEach(order => {
+        if (order.price >= minP && order.price <= maxP) {
+          const y = getY(order.price);
+          ctx.fillStyle = getHeatmapColor(order.norm);
+          ctx.fillRect(0, y - 2, width - 60, 4);
+        }
+      });
 
-          // Mid Price Line
-          const midY = height - ((col.mid - minP) / (maxP - minP)) * height;
-          ctx.fillStyle = "#ffffff";
-          ctx.fillRect(x, midY, colWidth + 0.5, 2);
+      // 2. Draw Candlesticks on top
+      if (candles.length > 0) {
+        const chartAreaWidth = width - 65;
+        const candleWidth = Math.max(4, (chartAreaWidth / candles.length) * 0.6);
+        const gap = chartAreaWidth / candles.length;
+
+        candles.forEach((c, i) => {
+          const x = i * gap + 15;
+          const openY = getY(c.open);
+          const closeY = getY(c.close);
+          const highY = getY(c.high);
+          const lowY = getY(c.low);
+
+          const isBull = c.close >= c.open;
+          ctx.strokeStyle = isBull ? "#00ff88" : "#ff3b69";
+          ctx.fillStyle = isBull ? "#00ff88" : "#ff3b69";
+
+          // Wick
+          ctx.beginPath();
+          ctx.moveTo(x + candleWidth / 2, highY);
+          ctx.lineTo(x + candleWidth / 2, lowY);
+          ctx.stroke();
+
+          // Body
+          const bodyY = Math.min(openY, closeY);
+          const bodyH = Math.max(Math.abs(closeY - openY), 2);
+          ctx.fillRect(x, bodyY, candleWidth, bodyH);
         });
       }
 
-      // Price Grid Labels
+      // 3. Current Price Dashed Line
+      const currentY = getY(currentPrice);
+      ctx.strokeStyle = "#ffffff";
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, currentY);
+      ctx.lineTo(width - 60, currentY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 4. Right Price Axis
+      ctx.fillStyle = "#10141f";
+      ctx.fillRect(width - 60, 0, 60, height);
       ctx.fillStyle = "#64748b";
       ctx.font = "10px monospace";
-      ctx.textAlign = "right";
+      ctx.textAlign = "left";
 
-      for (let i = 1; i <= 6; i++) {
-        const p = minP + ((maxP - minP) * (i / 7));
-        const y = height - (i / 7) * height;
-        ctx.fillText(p.toFixed(2), width - 8, y - 3);
+      for (let i = 1; i <= 8; i++) {
+        const p = minP + ((maxP - minP) * (i / 9));
+        const y = getY(p);
+        ctx.fillText(p.toFixed(2), width - 55, y + 3);
 
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
+        ctx.lineTo(width - 60, y);
         ctx.stroke();
       }
+
+      // Current Price Box on Axis
+      ctx.fillStyle = "#00ff88";
+      ctx.fillRect(width - 60, currentY - 8, 60, 16);
+      ctx.fillStyle = "#000000";
+      ctx.font = "bold 10px monospace";
+      ctx.fillText(currentPrice.toFixed(2), width - 56, currentY + 4);
 
       requestAnimationFrame(render);
     }
