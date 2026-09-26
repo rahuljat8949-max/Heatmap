@@ -79,7 +79,7 @@
       width: 55px;
       height: 6px;
       border-radius: 2px;
-      background: linear-gradient(to right, #001f3f, #0074d9, #2ecc40, #ffdc00, #ff4136);
+      background: linear-gradient(to right, #001f3f, #0074d9, #00ffcc, #ffdc00, #ff0055);
     }
   </style>
 </head>
@@ -89,14 +89,15 @@
     <div class="left-controls">
       <span class="badge">Binance XAUUSDT</span>
       <select id="timeframe-select">
-        <option value="1">Tick (Live)</option>
+        <option value="1" selected>Live Stream</option>
         <option value="60">1 Min</option>
-        <option value="300" selected>5 Min</option>
+        <option value="300">5 Min</option>
+        <option value="420">7 Min</option>
         <option value="900">15 Min</option>
       </select>
       <span id="status" style="font-size: 10px; color: #f59e0b;">Starting...</span>
     </div>
-    <div class="price-tag" id="last-price">Fetching...</div>
+    <div class="price-tag" id="last-price">Connecting...</div>
   </div>
 
   <div id="canvas-container">
@@ -126,35 +127,23 @@
     let bucketSec = parseInt(tfSelect.value, 10);
     tfSelect.addEventListener('change', (e) => {
       bucketSec = parseInt(e.target.value, 10);
-      historyCols.length = 0;
-      activeBucket = null;
     });
 
     let currentMid = 0;
     const historyCols = [];
-    const maxCols = Math.max(60, Math.floor(width / 5));
-    let activeBucket = null;
+    const maxCols = Math.max(90, Math.floor(width / 3.5));
+    let lastBucketTime = 0;
 
+    // Intensity color palette
     function getLiquidityColor(norm) {
-      if (norm <= 0.05) return 'rgba(0, 31, 63, 0.3)';
-      if (norm < 0.3) return `rgba(0, 116, 217, ${0.4 + norm * 1.5})`;
-      if (norm < 0.6) return `rgba(46, 204, 64, ${0.6 + norm * 0.5})`;
-      if (norm < 0.85) return `rgba(255, 220, 0, ${0.8 + norm * 0.2})`;
-      return `rgb(255, 65, 54)`; // Heavy resting wall
+      if (norm <= 0.05) return 'rgba(0, 31, 63, 0.4)';
+      if (norm < 0.25) return `rgba(0, 116, 217, ${0.5 + norm * 1.5})`;
+      if (norm < 0.55) return `rgba(0, 255, 204, ${0.7 + norm * 0.5})`;
+      if (norm < 0.8) return `rgba(255, 220, 0, ${0.85 + norm * 0.15})`;
+      return `rgb(255, 0, 85)`; // Heavy resting wall
     }
 
-    // Step 1: Initial Price Fetch via REST (Immediately loads price)
-    fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=XAUUSDT')
-      .then(res => res.json())
-      .then(data => {
-        if (data.price) {
-          currentMid = parseFloat(data.price);
-          priceDisplay.textContent = currentMid.toFixed(2);
-        }
-      })
-      .catch(() => {});
-
-    // Step 2: Live Futures Depth Stream
+    // Direct Futures depth connection
     const ws = new WebSocket('wss://fstream.binance.com/ws/xauusdt@depth20@250ms');
 
     ws.onopen = () => {
@@ -188,19 +177,21 @@
       bids.forEach(([p, q]) => { maxQty = Math.max(maxQty, q); snapshot.push({ p, q }); });
       asks.forEach(([p, q]) => { maxQty = Math.max(maxQty, q); snapshot.push({ p, q }); });
 
-      if (!activeBucket || activeBucket.time !== bucketTime) {
-        activeBucket = {
-          time: bucketTime,
+      if (bucketSec === 1 || bucketTime !== lastBucketTime) {
+        lastBucketTime = bucketTime;
+        historyCols.push({
           mid: currentMid,
           orders: snapshot,
           maxQty: maxQty
-        };
-        historyCols.push(activeBucket);
+        });
         if (historyCols.length > maxCols) historyCols.shift();
       } else {
-        activeBucket.mid = currentMid;
-        activeBucket.orders = snapshot;
-        activeBucket.maxQty = Math.max(activeBucket.maxQty, maxQty);
+        const lastCol = historyCols[historyCols.length - 1];
+        if (lastCol) {
+          lastCol.mid = currentMid;
+          lastCol.orders = snapshot;
+          lastCol.maxQty = Math.max(lastCol.maxQty, maxQty);
+        }
       }
     };
 
@@ -208,48 +199,47 @@
       ctx.fillStyle = "#06080d";
       ctx.fillRect(0, 0, width, height);
 
-      const displayMid = currentMid > 0 ? currentMid : 4300;
-      const verticalSpread = 15; // +/- $15 range around current price
-      const minP = displayMid - verticalSpread;
-      const maxP = displayMid + verticalSpread;
+      if (currentMid > 0) {
+        // Adaptive spread +/- $6 around Gold mid price for high resolution
+        const priceSpread = 6;
+        const minP = currentMid - priceSpread;
+        const maxP = currentMid + priceSpread;
+        const colWidth = width / maxCols;
 
-      const colWidth = width / maxCols;
-
-      if (historyCols.length > 0) {
         historyCols.forEach((col, idx) => {
           const x = idx * colWidth;
 
           col.orders.forEach(order => {
             if (order.p >= minP && order.p <= maxP) {
               const y = height - ((order.p - minP) / (maxP - minP)) * height;
-              const intensity = Math.min(order.q / (col.maxQty * 0.7), 1);
+              const intensity = Math.min(order.q / (col.maxQty * 0.6), 1);
               ctx.fillStyle = getLiquidityColor(intensity);
-              ctx.fillRect(x, y - 2, colWidth + 0.6, 4);
+              ctx.fillRect(x, y - 2, colWidth + 0.8, 4);
             }
           });
 
-          // Price trajectory line
+          // Price Trajectory
           const midY = height - ((col.mid - minP) / (maxP - minP)) * height;
           ctx.fillStyle = "#ffffff";
           ctx.fillRect(x, midY, colWidth + 0.5, 2);
         });
-      }
 
-      // Price Axis Labels
-      ctx.fillStyle = "#64748b";
-      ctx.font = "10px monospace";
-      ctx.textAlign = "right";
+        // Price Axis lines
+        ctx.fillStyle = "#64748b";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "right";
 
-      for (let i = 1; i <= 6; i++) {
-        const p = minP + ((maxP - minP) * (i / 7));
-        const y = height - (i / 7) * height;
-        ctx.fillText(p.toFixed(2), width - 8, y - 3);
+        for (let i = 1; i <= 6; i++) {
+          const p = minP + ((maxP - minP) * (i / 7));
+          const y = height - (i / 7) * height;
+          ctx.fillText(p.toFixed(2), width - 8, y - 3);
 
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
-        ctx.stroke();
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
       }
 
       requestAnimationFrame(render);
