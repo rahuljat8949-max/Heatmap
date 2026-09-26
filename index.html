@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>XAUUSDT Liquidity Heatmap</title>
+  <title>XAUUSDT Coinglass Liquidity Terminal</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -11,7 +11,7 @@
       color: #eaecef;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       overflow: hidden;
-      touch-action: manipulation;
+      touch-action: none;
     }
     #top-bar {
       display: flex;
@@ -20,6 +20,7 @@
       padding: 8px 12px;
       background: #10141f;
       border-bottom: 1px solid #1c2333;
+      user-select: none;
     }
     .left-controls {
       display: flex;
@@ -55,6 +56,7 @@
       position: relative;
       width: 100vw;
       height: calc(100vh - 52px);
+      cursor: grab;
     }
     canvas {
       display: block;
@@ -63,23 +65,28 @@
     }
     #legend {
       position: absolute;
-      bottom: 12px;
-      left: 12px;
+      bottom: 10px;
+      left: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      font-size: 9px;
+      color: #94a3b8;
+      background: rgba(8, 10, 16, 0.92);
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid #1e293b;
+      pointer-events: none;
+    }
+    .liq-item {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 10px;
-      color: #94a3b8;
-      background: rgba(8, 10, 16, 0.9);
-      padding: 4px 8px;
-      border-radius: 4px;
-      border: 1px solid #1e293b;
     }
-    .gradient-bar {
-      width: 55px;
-      height: 6px;
-      border-radius: 2px;
-      background: linear-gradient(to right, #001f3f, #0074d9, #00ffcc, #ffdc00, #ff0055);
+    .liq-color {
+      width: 12px;
+      height: 3px;
+      border-radius: 1px;
     }
   </style>
 </head>
@@ -92,8 +99,9 @@
         <option value="1m">1m</option>
         <option value="5m" selected>5m</option>
         <option value="15m">15m</option>
+        <option value="1h">1h</option>
       </select>
-      <span id="status" style="font-size: 10px; color: #00ff88;">REALTIME</span>
+      <span id="status" style="font-size: 10px; color: #00ff88;">DRAG ENABLED</span>
     </div>
     <div class="price-tag" id="last-price">--.--</div>
   </div>
@@ -101,9 +109,9 @@
   <div id="canvas-container">
     <canvas id="heatmapCanvas"></canvas>
     <div id="legend">
-      <span>Low Liq</span>
-      <div class="gradient-bar"></div>
-      <span>Whale Cluster</span>
+      <div class="liq-item"><div class="liq-color" style="background:#ff0055"></div> <span>Red: Major Liquidity Cluster (Stop Hunts)</span></div>
+      <div class="liq-item"><div class="liq-color" style="background:#ffaa00"></div> <span>Orange: Medium Liquidation Level</span></div>
+      <div class="liq-item"><div class="liq-color" style="background:#00d9ff"></div> <span>Cyan: Immediate Orderbook Wall</span></div>
     </div>
   </div>
 
@@ -111,7 +119,6 @@
     const canvas = document.getElementById('heatmapCanvas');
     const ctx = canvas.getContext('2d');
     const priceDisplay = document.getElementById('last-price');
-    const statusLabel = document.getElementById('status');
     const tfSelect = document.getElementById('timeframe-select');
 
     let width = 0, height = 0;
@@ -122,20 +129,47 @@
     window.addEventListener('resize', resize);
     resize();
 
-    let currentPrice = 4286.93;
+    let currentPrice = 4287.00;
     let candles = [];
     let orderBookLevels = [];
     let currentTf = tfSelect.value;
 
+    // Scrolling & Dragging Offsets
+    let panOffsetX = 0;
+    let panOffsetY = 0;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+
+    // Mobile Touch & Mouse Drag Handlers
+    const container = document.getElementById('canvas-container');
+
+    container.addEventListener('pointerdown', (e) => {
+      isDragging = true;
+      startX = e.clientX - panOffsetX;
+      startY = e.clientY - panOffsetY;
+    });
+
+    window.addEventListener('pointermove', (e) => {
+      if (!isDragging) return;
+      panOffsetX = e.clientX - startX;
+      panOffsetY = e.clientY - startY;
+    });
+
+    window.addEventListener('pointerup', () => { isDragging = false; });
+    window.addEventListener('pointercancel', () => { isDragging = false; });
+
     tfSelect.addEventListener('change', (e) => {
       currentTf = e.target.value;
+      panOffsetX = 0;
+      panOffsetY = 0;
       loadHistoricalKlines();
     });
 
-    // 1. Fetch Real Klines (Candlesticks) from Binance Futures
+    // 1. Fetch Real Historical Candles (Binance Futures)
     async function loadHistoricalKlines() {
       try {
-        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${currentTf}&limit=40`);
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${currentTf}&limit=80`);
         const data = await res.json();
         if (Array.isArray(data)) {
           candles = data.map(d => ({
@@ -143,8 +177,7 @@
             open: parseFloat(d[1]),
             high: parseFloat(d[2]),
             low: parseFloat(d[3]),
-            close: parseFloat(d[4]),
-            vol: parseFloat(d[5])
+            close: parseFloat(d[4])
           }));
           if (candles.length > 0) {
             currentPrice = candles[candles.length - 1].close;
@@ -154,19 +187,31 @@
       } catch (err) {}
     }
 
-    // 2. Fetch Live Futures Depth for Real Liquidity Walls
+    // 2. Fetch Live Futures Depth + Derive Liquidation Heatmap Clusters
     async function fetchLiquidity() {
       try {
         const res = await fetch('https://fapi.binance.com/fapi/v1/depth?symbol=XAUUSDT&limit=100');
         const data = await res.json();
         if (data.bids && data.asks) {
           const list = [];
-          data.bids.forEach(b => list.push({ price: parseFloat(b[0]), qty: parseFloat(b[1]), side: 'bid' }));
-          data.asks.forEach(a => list.push({ price: parseFloat(a[0]), qty: parseFloat(a[1]), side: 'ask' }));
-          
-          let maxQ = 0.001;
-          list.forEach(item => { if (item.qty > maxQ) maxQ = item.qty; });
-          list.forEach(item => item.norm = item.qty / maxQ);
+
+          // Live Limit orders
+          data.bids.forEach(b => list.push({ price: parseFloat(b[0]), qty: parseFloat(b[1]), type: 'bid', intensity: 0.4 }));
+          data.asks.forEach(a => list.push({ price: parseFloat(a[0]), qty: parseFloat(a[1]), type: 'ask', intensity: 0.4 }));
+
+          // Algorithmic Swing Liquidation Pools (Stop clusters above highs / below lows)
+          if (candles.length > 10) {
+            let highs = candles.slice(-30).map(c => c.high);
+            let lows = candles.slice(-30).map(c => c.low);
+            let maxHigh = Math.max(...highs);
+            let minLow = Math.min(...lows);
+
+            // Liquidity magnet points
+            list.push({ price: +(maxHigh + 0.8).toFixed(2), qty: 85, type: 'short_liq', label: 'SHORT LIQ HUNT', intensity: 0.95 });
+            list.push({ price: +(minLow - 0.8).toFixed(2), qty: 90, type: 'long_liq', label: 'LONG LIQ SWEEP', intensity: 0.95 });
+            list.push({ price: +(maxHigh + 5.0).toFixed(2), qty: 120, type: 'short_liq', label: 'MAJOR POOL', intensity: 1.0 });
+            list.push({ price: +(minLow - 5.0).toFixed(2), qty: 110, type: 'long_liq', label: 'MAJOR POOL', intensity: 1.0 });
+          }
 
           orderBookLevels = list;
           if (data.bids[0] && data.asks[0]) {
@@ -182,41 +227,60 @@
     setInterval(fetchLiquidity, 1000);
     setInterval(loadHistoricalKlines, 5000);
 
-    function getHeatmapColor(norm) {
-      if (norm < 0.15) return 'rgba(0, 100, 200, 0.25)';
-      if (norm < 0.4) return 'rgba(0, 220, 255, 0.45)';
-      if (norm < 0.7) return 'rgba(255, 230, 0, 0.7)';
-      return 'rgba(255, 30, 80, 0.95)'; // Coinglass red/orange whale band
-    }
-
     function render() {
       ctx.fillStyle = "#080a10";
       ctx.fillRect(0, 0, width, height);
 
-      // Price Spread calculation (+/- $15 from market)
-      const range = 14;
-      const minP = currentPrice - range;
-      const maxP = currentPrice + range;
+      const chartAreaWidth = width - 85;
+      
+      // Dynamic vertical price scale with Drag Y adjustment
+      const visibleRange = 22; // $22 vertical window
+      const baseMid = currentPrice - (panOffsetY / height) * visibleRange;
+      const minP = baseMid - (visibleRange / 2);
+      const maxP = baseMid + (visibleRange / 2);
 
       const getY = (p) => height - ((p - minP) / (maxP - minP)) * height;
 
-      // 1. Draw Coinglass Horizontal Liquidity Bands across the canvas
+      // 1. Draw Coinglass-Style Horizontal Liquidity Bands across chart
       orderBookLevels.forEach(order => {
         if (order.price >= minP && order.price <= maxP) {
           const y = getY(order.price);
-          ctx.fillStyle = getHeatmapColor(order.norm);
-          ctx.fillRect(0, y - 2, width - 60, 4);
+
+          if (order.intensity >= 0.9) {
+            // Major Red/Orange Liquidation line
+            ctx.fillStyle = order.intensity === 1.0 ? "rgba(255, 0, 85, 0.45)" : "rgba(255, 170, 0, 0.35)";
+            ctx.fillRect(0, y - 2, chartAreaWidth, 5);
+
+            ctx.strokeStyle = order.intensity === 1.0 ? "#ff0055" : "#ffaa00";
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(chartAreaWidth, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Text Label on chart
+            ctx.fillStyle = order.intensity === 1.0 ? "#ff4d88" : "#ffcc00";
+            ctx.font = "bold 9px monospace";
+            ctx.fillText(`${order.label || 'LIQUIDITY'} (${order.price.toFixed(2)})`, 10, y - 4);
+          } else if (order.qty > 5) {
+            // Minor book limit wall
+            ctx.fillStyle = "rgba(0, 217, 255, 0.15)";
+            ctx.fillRect(0, y - 1, chartAreaWidth, 2.5);
+          }
         }
       });
 
-      // 2. Draw Candlesticks on top
+      // 2. Draw Candlesticks with Touch Drag X Offset
       if (candles.length > 0) {
-        const chartAreaWidth = width - 65;
-        const candleWidth = Math.max(4, (chartAreaWidth / candles.length) * 0.6);
-        const gap = chartAreaWidth / candles.length;
+        const candleSpacing = 16;
+        const candleWidth = 9;
+        const startCandleX = chartAreaWidth - (candles.length * candleSpacing) + panOffsetX;
 
         candles.forEach((c, i) => {
-          const x = i * gap + 15;
+          const x = startCandleX + (i * candleSpacing);
+          if (x < -20 || x > chartAreaWidth + 20) return; // culling
+
           const openY = getY(c.open);
           const closeY = getY(c.close);
           const highY = getY(c.high);
@@ -226,13 +290,13 @@
           ctx.strokeStyle = isBull ? "#00ff88" : "#ff3b69";
           ctx.fillStyle = isBull ? "#00ff88" : "#ff3b69";
 
-          // Wick
+          // Candle Wick
           ctx.beginPath();
           ctx.moveTo(x + candleWidth / 2, highY);
           ctx.lineTo(x + candleWidth / 2, lowY);
           ctx.stroke();
 
-          // Body
+          // Candle Body
           const bodyY = Math.min(openY, closeY);
           const bodyH = Math.max(Math.abs(closeY - openY), 2);
           ctx.fillRect(x, bodyY, candleWidth, bodyH);
@@ -242,38 +306,38 @@
       // 3. Current Price Dashed Line
       const currentY = getY(currentPrice);
       ctx.strokeStyle = "#ffffff";
-      ctx.setLineDash([4, 4]);
+      ctx.setLineDash([3, 3]);
       ctx.beginPath();
       ctx.moveTo(0, currentY);
-      ctx.lineTo(width - 60, currentY);
+      ctx.lineTo(chartAreaWidth, currentY);
       ctx.stroke();
       ctx.setLineDash([]);
 
       // 4. Right Price Axis
       ctx.fillStyle = "#10141f";
-      ctx.fillRect(width - 60, 0, 60, height);
+      ctx.fillRect(chartAreaWidth, 0, 85, height);
       ctx.fillStyle = "#64748b";
       ctx.font = "10px monospace";
       ctx.textAlign = "left";
 
-      for (let i = 1; i <= 8; i++) {
-        const p = minP + ((maxP - minP) * (i / 9));
+      for (let i = 1; i <= 10; i++) {
+        const p = minP + ((maxP - minP) * (i / 11));
         const y = getY(p);
-        ctx.fillText(p.toFixed(2), width - 55, y + 3);
+        ctx.fillText(p.toFixed(2), chartAreaWidth + 6, y + 3);
 
         ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.lineTo(width - 60, y);
+        ctx.lineTo(chartAreaWidth, y);
         ctx.stroke();
       }
 
-      // Current Price Box on Axis
+      // 5. Current Price Marker on Axis
       ctx.fillStyle = "#00ff88";
-      ctx.fillRect(width - 60, currentY - 8, 60, 16);
+      ctx.fillRect(chartAreaWidth, currentY - 9, 85, 18);
       ctx.fillStyle = "#000000";
-      ctx.font = "bold 10px monospace";
-      ctx.fillText(currentPrice.toFixed(2), width - 56, currentY + 4);
+      ctx.font = "bold 11px monospace";
+      ctx.fillText(currentPrice.toFixed(2), chartAreaWidth + 6, currentY + 4);
 
       requestAnimationFrame(render);
     }
