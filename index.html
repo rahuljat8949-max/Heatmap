@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="hi">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>XAUUSD Liquidity Heatmap</title>
+  <title>Gold (XAU) Liquidity Heatmap</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -15,10 +15,8 @@
     }
     #top-bar {
       display: flex;
-      flex-wrap: wrap;
       justify-content: space-between;
       align-items: center;
-      gap: 8px;
       padding: 8px 12px;
       background: #11141c;
       border-bottom: 1px solid #1f2533;
@@ -41,7 +39,7 @@
       background: #1b2234;
       color: #00f0ff;
       border: 1px solid #2e384d;
-      padding: 4px 8px;
+      padding: 4px 6px;
       border-radius: 4px;
       font-size: 11px;
       font-weight: bold;
@@ -56,7 +54,7 @@
     #canvas-container {
       position: relative;
       width: 100vw;
-      height: calc(100vh - 54px);
+      height: calc(100vh - 52px);
     }
     canvas {
       display: block;
@@ -65,8 +63,8 @@
     }
     #legend {
       position: absolute;
-      bottom: 12px;
-      left: 12px;
+      bottom: 10px;
+      left: 10px;
       display: flex;
       align-items: center;
       gap: 6px;
@@ -78,10 +76,10 @@
       border: 1px solid #1e293b;
     }
     .gradient-bar {
-      width: 55px;
+      width: 50px;
       height: 6px;
       border-radius: 2px;
-      background: linear-gradient(to right, #001f3f, #0074d9, #2ecc40, #ffdc00, #ff4136);
+      background: linear-gradient(to right, #002244, #00aaff, #ffff00, #ff0044);
     }
   </style>
 </head>
@@ -89,13 +87,13 @@
 
   <div id="top-bar">
     <div class="left-controls">
-      <span class="badge">XAUUSDT (Gold)</span>
+      <span class="badge">XAU/USD (Gold)</span>
       <select id="timeframe-select">
-        <option value="60000">1 Min</option>
-        <option value="180000">3 Min</option>
-        <option value="300000" selected>5 Min</option>
-        <option value="420000">7 Min</option>
-        <option value="900000">15 Min</option>
+        <option value="1">1 Sec (Realtime)</option>
+        <option value="60">1 Min</option>
+        <option value="300">5 Min</option>
+        <option value="420">7 Min</option>
+        <option value="900">15 Min</option>
       </select>
       <span id="status" style="font-size: 10px; color: #f59e0b;">Connecting...</span>
     </div>
@@ -105,9 +103,9 @@
   <div id="canvas-container">
     <canvas id="heatmapCanvas"></canvas>
     <div id="legend">
-      <span>Low Liq</span>
+      <span>Low</span>
       <div class="gradient-bar"></div>
-      <span>High Wall</span>
+      <span>High Liq</span>
     </div>
   </div>
 
@@ -121,35 +119,33 @@
     let width = 0, height = 0;
     function resize() {
       width = canvas.width = window.innerWidth;
-      height = canvas.height = window.innerHeight - 54;
+      height = canvas.height = window.innerHeight - 52;
     }
     window.addEventListener('resize', resize);
     resize();
 
-    let bucketIntervalMs = parseInt(tfSelect.value, 10);
+    let bucketSec = parseInt(tfSelect.value, 10);
     tfSelect.addEventListener('change', (e) => {
-      bucketIntervalMs = parseInt(e.target.value, 10);
-      historyColumns.length = 0;
-      currentBucket = null;
+      bucketSec = parseInt(e.target.value, 10);
+      historyCols.length = 0;
+      activeBucket = null;
     });
 
     let currentMid = 0;
-    const historyColumns = [];
-    const maxColumns = Math.max(60, Math.floor(width / 6));
+    const historyCols = [];
+    const maxCols = Math.max(80, Math.floor(width / 4));
+    let activeBucket = null;
 
-    let currentBucket = null;
-
-    // Color gradient mapping: Dark Navy -> Teal -> Green -> Yellow -> Bright Red
+    // Heatmap colors: Deep Blue -> Cyan -> Yellow -> Neon Red
     function getLiquidityColor(norm) {
-      if (norm <= 0) return 'rgba(8, 10, 15, 0)';
-      if (norm < 0.2) return `rgba(0, 70, 160, ${0.4 + norm * 2})`;
-      if (norm < 0.45) return `rgba(0, 210, 200, ${0.6 + norm})`;
-      if (norm < 0.75) return `rgba(255, 220, 0, ${0.75 + norm * 0.25})`;
-      return `rgb(255, 45, 75)`; // Heavy resting institutional orders
+      if (norm <= 0.05) return 'rgba(0, 30, 80, 0.4)';
+      if (norm < 0.3) return `rgba(0, 150, 255, ${0.4 + norm * 1.5})`;
+      if (norm < 0.65) return `rgba(255, 230, 0, ${0.7 + norm * 0.3})`;
+      return `rgb(255, 30, 70)`; // Whale wall
     }
 
-    // Connect to Binance Futures XAUUSDT Depth Stream
-    const ws = new WebSocket('wss://fstream.binance.com/ws/xauusdt@depth20@250ms');
+    // Connect to Binance Spot Gold Stream (PAXGUSDT)
+    const ws = new WebSocket('wss://stream.binance.com:9443/ws/paxgusdt@depth20@100ms');
 
     ws.onopen = () => {
       statusLabel.textContent = "CONNECTED (LIVE)";
@@ -157,46 +153,41 @@
     };
 
     ws.onerror = () => {
-      statusLabel.textContent = "DISCONNECTED";
-      statusLabel.style.color = "#ff4136";
+      statusLabel.textContent = "OFFLINE";
+      statusLabel.style.color = "#ff4444";
     };
 
     ws.onmessage = (evt) => {
       const data = JSON.parse(evt.data);
-      if (!data.b || !data.a) return;
+      if (!data.bids || !data.asks || data.bids.length === 0) return;
 
-      const bids = data.b.map(b => [parseFloat(b[0]), parseFloat(b[1])]);
-      const asks = data.a.map(a => [parseFloat(a[0]), parseFloat(a[1])]);
+      const bids = data.bids.map(b => [parseFloat(b[0]), parseFloat(b[1])]);
+      const asks = data.asks.map(a => [parseFloat(a[0]), parseFloat(a[1])]);
 
-      if (bids.length && asks.length) {
-        currentMid = (bids[0][0] + asks[0][0]) / 2;
-        priceDisplay.textContent = currentMid.toFixed(2);
-      }
+      currentMid = (bids[0][0] + asks[0][0]) / 2;
+      priceDisplay.textContent = currentMid.toFixed(2);
 
-      const now = Date.now();
-      const bucketStart = Math.floor(now / bucketIntervalMs) * bucketIntervalMs;
+      const now = Math.floor(Date.now() / 1000);
+      const bucketTime = Math.floor(now / bucketSec) * bucketSec;
 
-      let maxQty = 0.001;
+      let maxQty = 0.01;
       const snapshot = [];
       bids.forEach(([p, q]) => { maxQty = Math.max(maxQty, q); snapshot.push({ p, q }); });
       asks.forEach(([p, q]) => { maxQty = Math.max(maxQty, q); snapshot.push({ p, q }); });
 
-      if (!currentBucket || currentBucket.time !== bucketStart) {
-        currentBucket = {
-          time: bucketStart,
+      if (!activeBucket || activeBucket.time !== bucketTime) {
+        activeBucket = {
+          time: bucketTime,
           mid: currentMid,
           orders: snapshot,
           maxQty: maxQty
         };
-        historyColumns.push(currentBucket);
-        if (historyColumns.length > maxColumns) {
-          historyColumns.shift();
-        }
+        historyCols.push(activeBucket);
+        if (historyCols.length > maxCols) historyCols.shift();
       } else {
-        // Current open timeframe bucket updates
-        currentBucket.mid = currentMid;
-        currentBucket.orders = snapshot;
-        currentBucket.maxQty = Math.max(currentBucket.maxQty, maxQty);
+        activeBucket.mid = currentMid;
+        activeBucket.orders = snapshot;
+        activeBucket.maxQty = Math.max(activeBucket.maxQty, maxQty);
       }
     };
 
@@ -204,40 +195,39 @@
       ctx.fillStyle = "#080a0f";
       ctx.fillRect(0, 0, width, height);
 
-      if (historyColumns.length > 0 && currentMid > 0) {
-        const colWidth = width / maxColumns;
-        const verticalSpread = 12; // +/- $12 spread range for gold precision
-        const minP = currentMid - verticalSpread;
-        const maxP = currentMid + verticalSpread;
+      if (historyCols.length > 0 && currentMid > 0) {
+        const colWidth = width / maxCols;
+        const priceSpread = 10; // +/- $10 Gold spread
+        const minP = currentMid - priceSpread;
+        const maxP = currentMid + priceSpread;
 
-        historyColumns.forEach((col, idx) => {
+        historyCols.forEach((col, idx) => {
           const x = idx * colWidth;
 
-          // Liquidity blocks
           col.orders.forEach(order => {
             if (order.p >= minP && order.p <= maxP) {
               const y = height - ((order.p - minP) / (maxP - minP)) * height;
-              const intensity = Math.min(order.q / (col.maxQty * 0.75), 1);
+              const intensity = Math.min(order.q / (col.maxQty * 0.8), 1);
               ctx.fillStyle = getLiquidityColor(intensity);
-              ctx.fillRect(x, y - 2, colWidth + 0.8, 3.5);
+              ctx.fillRect(x, y - 2, colWidth + 0.6, 3.5);
             }
           });
 
-          // Price trajectory line
+          // Price Trajectory
           const midY = height - ((col.mid - minP) / (maxP - minP)) * height;
           ctx.fillStyle = "#ffffff";
           ctx.fillRect(x, midY, colWidth + 0.5, 1.8);
         });
 
-        // Price Axis lines & text
-        ctx.fillStyle = "#718096";
+        // Price Axis Grid
+        ctx.fillStyle = "#64748b";
         ctx.font = "10px monospace";
         ctx.textAlign = "right";
 
-        for (let i = 1; i <= 8; i++) {
-          const p = minP + ((maxP - minP) * (i / 9));
-          const y = height - (i / 9) * height;
-          ctx.fillText(p.toFixed(2), width - 6, y - 3);
+        for (let i = 1; i <= 6; i++) {
+          const p = minP + ((maxP - minP) * (i / 7));
+          const y = height - (i / 7) * height;
+          ctx.fillText(p.toFixed(2), width - 8, y - 3);
 
           ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
           ctx.beginPath();
