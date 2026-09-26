@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>XAUUSD Liquidity Heatmap</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #080a0f;
+      color: #eaecef;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
+      touch-action: manipulation;
+    }
+    #top-bar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #11141c;
+      border-bottom: 1px solid #1f2533;
+    }
+    .left-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: #1b2234;
+      color: #ffd700;
+      font-weight: 700;
+      border: 1px solid #36415a;
+    }
+    select {
+      background: #1b2234;
+      color: #00f0ff;
+      border: 1px solid #2e384d;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: bold;
+      outline: none;
+    }
+    .price-tag {
+      font-size: 15px;
+      font-weight: bold;
+      color: #00ff88;
+      font-family: monospace;
+    }
+    #canvas-container {
+      position: relative;
+      width: 100vw;
+      height: calc(100vh - 54px);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    #legend {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      color: #94a3b8;
+      background: rgba(8, 10, 15, 0.85);
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid #1e293b;
+    }
+    .gradient-bar {
+      width: 55px;
+      height: 6px;
+      border-radius: 2px;
+      background: linear-gradient(to right, #001f3f, #0074d9, #2ecc40, #ffdc00, #ff4136);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="top-bar">
+    <div class="left-controls">
+      <span class="badge">XAUUSDT (Gold)</span>
+      <select id="timeframe-select">
+        <option value="60000">1 Min</option>
+        <option value="180000">3 Min</option>
+        <option value="300000" selected>5 Min</option>
+        <option value="420000">7 Min</option>
+        <option value="900000">15 Min</option>
+      </select>
+      <span id="status" style="font-size: 10px; color: #f59e0b;">Connecting...</span>
+    </div>
+    <div class="price-tag" id="last-price">--.--</div>
+  </div>
+
+  <div id="canvas-container">
+    <canvas id="heatmapCanvas"></canvas>
+    <div id="legend">
+      <span>Low Liq</span>
+      <div class="gradient-bar"></div>
+      <span>High Wall</span>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('heatmapCanvas');
+    const ctx = canvas.getContext('2d');
+    const priceDisplay = document.getElementById('last-price');
+    const statusLabel = document.getElementById('status');
+    const tfSelect = document.getElementById('timeframe-select');
+
+    let width = 0, height = 0;
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight - 54;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let bucketIntervalMs = parseInt(tfSelect.value, 10);
+    tfSelect.addEventListener('change', (e) => {
+      bucketIntervalMs = parseInt(e.target.value, 10);
+      historyColumns.length = 0;
+      currentBucket = null;
+    });
+
+    let currentMid = 0;
+    const historyColumns = [];
+    const maxColumns = Math.max(60, Math.floor(width / 6));
+
+    let currentBucket = null;
+
+    // Color gradient mapping: Dark Navy -> Teal -> Green -> Yellow -> Bright Red
+    function getLiquidityColor(norm) {
+      if (norm <= 0) return 'rgba(8, 10, 15, 0)';
+      if (norm < 0.2) return `rgba(0, 70, 160, ${0.4 + norm * 2})`;
+      if (norm < 0.45) return `rgba(0, 210, 200, ${0.6 + norm})`;
+      if (norm < 0.75) return `rgba(255, 220, 0, ${0.75 + norm * 0.25})`;
+      return `rgb(255, 45, 75)`; // Heavy resting institutional orders
+    }
+
+    // Connect to Binance Futures XAUUSDT Depth Stream
+    const ws = new WebSocket('wss://fstream.binance.com/ws/xauusdt@depth20@250ms');
+
+    ws.onopen = () => {
+      statusLabel.textContent = "CONNECTED (LIVE)";
+      statusLabel.style.color = "#00ff88";
+    };
+
+    ws.onerror = () => {
+      statusLabel.textContent = "DISCONNECTED";
+      statusLabel.style.color = "#ff4136";
+    };
+
+    ws.onmessage = (evt) => {
+      const data = JSON.parse(evt.data);
+      if (!data.b || !data.a) return;
+
+      const bids = data.b.map(b => [parseFloat(b[0]), parseFloat(b[1])]);
+      const asks = data.a.map(a => [parseFloat(a[0]), parseFloat(a[1])]);
+
+      if (bids.length && asks.length) {
+        currentMid = (bids[0][0] + asks[0][0]) / 2;
+        priceDisplay.textContent = currentMid.toFixed(2);
+      }
+
+      const now = Date.now();
+      const bucketStart = Math.floor(now / bucketIntervalMs) * bucketIntervalMs;
+
+      let maxQty = 0.001;
+      const snapshot = [];
+      bids.forEach(([p, q]) => { maxQty = Math.max(maxQty, q); snapshot.push({ p, q }); });
+      asks.forEach(([p, q]) => { maxQty = Math.max(maxQty, q); snapshot.push({ p, q }); });
+
+      if (!currentBucket || currentBucket.time !== bucketStart) {
+        currentBucket = {
+          time: bucketStart,
+          mid: currentMid,
+          orders: snapshot,
+          maxQty: maxQty
+        };
+        historyColumns.push(currentBucket);
+        if (historyColumns.length > maxColumns) {
+          historyColumns.shift();
+        }
+      } else {
+        // Current open timeframe bucket updates
+        currentBucket.mid = currentMid;
+        currentBucket.orders = snapshot;
+        currentBucket.maxQty = Math.max(currentBucket.maxQty, maxQty);
+      }
+    };
+
+    function render() {
+      ctx.fillStyle = "#080a0f";
+      ctx.fillRect(0, 0, width, height);
+
+      if (historyColumns.length > 0 && currentMid > 0) {
+        const colWidth = width / maxColumns;
+        const verticalSpread = 12; // +/- $12 spread range for gold precision
+        const minP = currentMid - verticalSpread;
+        const maxP = currentMid + verticalSpread;
+
+        historyColumns.forEach((col, idx) => {
+          const x = idx * colWidth;
+
+          // Liquidity blocks
+          col.orders.forEach(order => {
+            if (order.p >= minP && order.p <= maxP) {
+              const y = height - ((order.p - minP) / (maxP - minP)) * height;
+              const intensity = Math.min(order.q / (col.maxQty * 0.75), 1);
+              ctx.fillStyle = getLiquidityColor(intensity);
+              ctx.fillRect(x, y - 2, colWidth + 0.8, 3.5);
+            }
+          });
+
+          // Price trajectory line
+          const midY = height - ((col.mid - minP) / (maxP - minP)) * height;
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(x, midY, colWidth + 0.5, 1.8);
+        });
+
+        // Price Axis lines & text
+        ctx.fillStyle = "#718096";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "right";
+
+        for (let i = 1; i <= 8; i++) {
+          const p = minP + ((maxP - minP) * (i / 9));
+          const y = height - (i / 9) * height;
+          ctx.fillText(p.toFixed(2), width - 6, y - 3);
+
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+      }
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>
